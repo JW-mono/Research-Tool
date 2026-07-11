@@ -8,6 +8,8 @@ extraction from a single short input -- there's no multi-step reasoning or
 long-context work here that would need a bigger model.
 """
 
+import sys
+import threading
 from concurrent.futures import ThreadPoolExecutor
 
 import anthropic
@@ -38,6 +40,8 @@ class MissingAPIKeyError(RuntimeError):
 
 
 _client = None
+_warned_lock = threading.Lock()
+_warned = False
 
 
 def _get_client():
@@ -45,6 +49,15 @@ def _get_client():
     if _client is None:
         _client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY from env
     return _client
+
+
+def _warn_once(message):
+    global _warned
+    with _warned_lock:
+        if _warned:
+            return
+        _warned = True
+    print(f"Warning: {message}", file=sys.stderr)
 
 
 def summarize_abstract(abstract):
@@ -76,11 +89,23 @@ def summarize_abstract(abstract):
         if "authentication" in str(exc).lower():
             raise MissingAPIKeyError(missing_key_message) from exc
         raise
-    except anthropic.APIError:
-        return dict(_EMPTY_SUMMARY)
+    except anthropic.APIError as exc:
+        _warn_once(
+            f"Claude API call failed ({type(exc).__name__}: {exc}). "
+            "Summaries will show this error instead of content until it's resolved."
+        )
+        return {
+            "introduction": f"(Claude API error: {exc})",
+            "results": "",
+            "conclusion": "",
+        }
 
     parsed = response.parsed_output
     if parsed is None:
+        _warn_once(
+            f"Claude API returned no parsed output (stop_reason={response.stop_reason!r}). "
+            "Summaries will be blank until this is resolved."
+        )
         return dict(_EMPTY_SUMMARY)
     return parsed.model_dump()
 
