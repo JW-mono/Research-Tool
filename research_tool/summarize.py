@@ -26,7 +26,14 @@ SYSTEM_PROMPT = (
     "return an empty string for it rather than guessing."
 )
 
-_EMPTY_SUMMARY = {"introduction": "", "results": "", "conclusion": ""}
+def _summary(introduction="", results="", conclusion="", status="ok", error=None):
+    return {
+        "introduction": introduction,
+        "results": results,
+        "conclusion": conclusion,
+        "status": status,  # "ok" | "no_abstract" | "error"
+        "error": error,
+    }
 
 
 class AbstractSummary(BaseModel):
@@ -61,10 +68,14 @@ def _warn_once(message):
 
 
 def summarize_abstract(abstract):
-    """Return {"introduction": str, "results": str, "conclusion": str}."""
+    """Return a dict with introduction/results/conclusion text plus a
+    "status" of "ok" (summarized normally), "no_abstract" (OpenAlex didn't
+    have an abstract for this result -- nothing to summarize, not a failure),
+    or "error" (the Claude API call failed -- see the "error" field).
+    """
     abstract = (abstract or "").strip()
     if not abstract:
-        return dict(_EMPTY_SUMMARY)
+        return _summary(status="no_abstract")
 
     missing_key_message = (
         "ANTHROPIC_API_KEY is not set (or is invalid). Set it in your "
@@ -90,24 +101,21 @@ def summarize_abstract(abstract):
             raise MissingAPIKeyError(missing_key_message) from exc
         raise
     except anthropic.APIError as exc:
+        message = f"{type(exc).__name__}: {exc}"
         _warn_once(
-            f"Claude API call failed ({type(exc).__name__}: {exc}). "
-            "Summaries will show this error instead of content until it's resolved."
+            f"Claude API call failed ({message}). "
+            "Affected results will show this error instead of a summary until it's resolved."
         )
-        return {
-            "introduction": f"(Claude API error: {exc})",
-            "results": "",
-            "conclusion": "",
-        }
+        return _summary(status="error", error=message)
 
     parsed = response.parsed_output
     if parsed is None:
-        _warn_once(
-            f"Claude API returned no parsed output (stop_reason={response.stop_reason!r}). "
-            "Summaries will be blank until this is resolved."
-        )
-        return dict(_EMPTY_SUMMARY)
-    return parsed.model_dump()
+        message = f"Claude returned no parsed output (stop_reason={response.stop_reason!r})"
+        _warn_once(message + ". Affected results will show this error until it's resolved.")
+        return _summary(status="error", error=message)
+
+    fields = parsed.model_dump()
+    return _summary(status="ok", **fields)
 
 
 def summarize_abstracts(abstracts, max_workers=5):
