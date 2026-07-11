@@ -6,7 +6,7 @@ import textwrap
 
 from research_tool.openalex import search_publications
 from research_tool.accessibility import check_access
-from research_tool.summarize import summarize_abstract
+from research_tool.summarize import summarize_abstracts, MissingAPIKeyError
 
 
 def _wrap(text, width=88, indent="      "):
@@ -70,10 +70,12 @@ def _write_json(records, path):
 
 def build_records(topic, limit, mailto):
     publications = search_publications(topic, limit=limit, mailto=mailto)
+    summaries = summarize_abstracts([pub["abstract"] for pub in publications])
+
     records = []
-    for pub in publications:
+    for pub, summary in zip(publications, summaries):
         pub["access_status"] = check_access(pub)
-        pub["summary"] = summarize_abstract(pub["abstract"])
+        pub["summary"] = summary
         records.append(pub)
     return records
 
