@@ -24,6 +24,18 @@ python search.py "topic" --limit 25 --sort access --csv results.csv --json resul
 - `--csv PATH` / `--json PATH` — also export the results
 - `--mailto EMAIL` — sent to OpenAlex's "polite pool" for faster, more reliable responses (optional but recommended)
 
+### GUI
+
+```
+python gui.py
+```
+
+A Tkinter window (ships with Python, nothing to install) with a search bar
+at the top and every result's title, metadata, access status, and full
+introduction/results/conclusion summary shown directly in a scrollable
+report — no need to click into a result to see its summary. Open-access
+links are clickable. Export buttons in the top-right write CSV/JSON.
+
 ## How it works
 
 1. **Search** — queries the [OpenAlex](https://openalex.org) API (free, no key required) for publications matching your topic.
@@ -49,12 +61,14 @@ python search.py "topic" --limit 25 --sort access --csv results.csv --json resul
 ## Project layout
 
 ```
-search.py                          entry point
+search.py                          CLI entry point
+gui.py                              GUI entry point
 research_tool/
   openalex.py                      OpenAlex API client + abstract reconstruction
   accessibility.py                 TU Delft access-status logic
   summarize.py                     abstract -> intro/results/conclusion heuristic
   cli.py                           argument parsing, report printing, CSV/JSON export
+  gui.py                           Tkinter GUI
 data/
   tudelft_publishers.json          curated publisher list (edit as needed)
 ```
