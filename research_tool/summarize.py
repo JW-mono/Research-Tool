@@ -1,86 +1,91 @@
-"""Heuristic intro/results/conclusion extraction from an abstract.
+"""LLM-based abstract summarization via the Claude API.
 
-No LLM involved: most abstracts are 3-6 sentences, so this does what it can
-with structure. If the abstract has explicit labels (common in PubMed-style
-structured abstracts, e.g. "Background: ... Methods: ... Results: ...
-Conclusion: ..."), those are used directly. Otherwise it falls back to
-splitting the abstract into thirds by sentence position, which is a rough
-approximation since most abstracts blend background/results/conclusion
-together in just a few sentences.
+Uses claude-haiku-4-5: this is a short, well-specified extraction task (a
+~150-300 word abstract in, three short structured fields out) run in a loop
+over every search result. Haiku matches that complexity at a fraction of the
+cost and latency of Sonnet/Opus, with no quality loss for structured
+extraction from a single short input -- there's no multi-step reasoning or
+long-context work here that would need a bigger model.
 """
 
-import re
+from concurrent.futures import ThreadPoolExecutor
 
-_INTRO_LABELS = r"(background|objective|objectives|purpose|aim|aims|introduction)"
-_RESULTS_LABELS = r"(results|findings|methods and results)"
-_CONCLUSION_LABELS = r"(conclusion|conclusions|discussion|summary)"
+import anthropic
+from pydantic import BaseModel
 
-_LABEL_PATTERN = re.compile(
-    rf"(?P<label>{_INTRO_LABELS}|{_RESULTS_LABELS}|{_CONCLUSION_LABELS})\s*:\s*",
-    re.IGNORECASE,
+MODEL = "claude-haiku-4-5"
+
+SYSTEM_PROMPT = (
+    "You summarize academic abstracts for a researcher skimming search results. "
+    "Given an abstract, extract three short sections in your own words: "
+    "introduction (the background/motivation), results (what was found or done), "
+    "and conclusion (the takeaway/implication). One to two sentences each. "
+    "If the abstract doesn't contain enough information for a section, "
+    "return an empty string for it rather than guessing."
 )
 
-_SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
+_EMPTY_SUMMARY = {"introduction": "", "results": "", "conclusion": ""}
 
 
-def _bucket_for_label(label):
-    label = label.lower()
-    if re.fullmatch(_INTRO_LABELS, label):
-        return "introduction"
-    if re.fullmatch(_RESULTS_LABELS, label):
-        return "results"
-    return "conclusion"
+class AbstractSummary(BaseModel):
+    introduction: str
+    results: str
+    conclusion: str
 
 
-def _split_structured(abstract):
-    matches = list(_LABEL_PATTERN.finditer(abstract))
-    if len(matches) < 2:
-        return None
-
-    buckets = {"introduction": [], "results": [], "conclusion": []}
-    for i, match in enumerate(matches):
-        start = match.end()
-        end = matches[i + 1].start() if i + 1 < len(matches) else len(abstract)
-        text = abstract[start:end].strip()
-        if text:
-            buckets[_bucket_for_label(match.group("label"))].append(text)
-
-    return {k: " ".join(v) for k, v in buckets.items()}
+class MissingAPIKeyError(RuntimeError):
+    pass
 
 
-def _split_by_position(abstract):
-    sentences = [s.strip() for s in _SENTENCE_SPLIT.split(abstract) if s.strip()]
-    n = len(sentences)
-    if n == 0:
-        return {"introduction": "", "results": "", "conclusion": ""}
-    if n <= 2:
-        # Too short to meaningfully separate; show the whole thing as-is.
-        joined = " ".join(sentences)
-        return {"introduction": joined, "results": "", "conclusion": ""}
+_client = None
 
-    intro_end = max(1, round(n * 0.35))
-    results_end = max(intro_end + 1, round(n * 0.75))
 
-    return {
-        "introduction": " ".join(sentences[:intro_end]),
-        "results": " ".join(sentences[intro_end:results_end]),
-        "conclusion": " ".join(sentences[results_end:]),
-    }
+def _get_client():
+    global _client
+    if _client is None:
+        _client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY from env
+    return _client
 
 
 def summarize_abstract(abstract):
-    """Return {"introduction": str, "results": str, "conclusion": str}.
-
-    Uses labeled sections when the abstract is structured; otherwise falls
-    back to a naive positional split. Always returns all three keys, empty
-    string if nothing could be attributed to that section.
-    """
+    """Return {"introduction": str, "results": str, "conclusion": str}."""
     abstract = (abstract or "").strip()
     if not abstract:
-        return {"introduction": "", "results": "", "conclusion": ""}
+        return dict(_EMPTY_SUMMARY)
 
-    structured = _split_structured(abstract)
-    if structured:
-        return structured
+    missing_key_message = (
+        "ANTHROPIC_API_KEY is not set (or is invalid). Set it in your "
+        "environment before running, e.g.:\n"
+        '  setx ANTHROPIC_API_KEY "sk-ant-..."   (Windows, new terminals)\n'
+        '  $env:ANTHROPIC_API_KEY = "sk-ant-..."   (PowerShell, this session)'
+    )
 
-    return _split_by_position(abstract)
+    try:
+        response = _get_client().messages.parse(
+            model=MODEL,
+            max_tokens=500,
+            system=SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": abstract}],
+            output_format=AbstractSummary,
+        )
+    except anthropic.AuthenticationError as exc:
+        raise MissingAPIKeyError(missing_key_message) from exc
+    except TypeError as exc:
+        # The SDK raises a plain TypeError (not AuthenticationError) when no
+        # credentials are configured at all, before any network call is made.
+        if "authentication" in str(exc).lower():
+            raise MissingAPIKeyError(missing_key_message) from exc
+        raise
+    except anthropic.APIError:
+        return dict(_EMPTY_SUMMARY)
+
+    parsed = response.parsed_output
+    if parsed is None:
+        return dict(_EMPTY_SUMMARY)
+    return parsed.model_dump()
+
+
+def summarize_abstracts(abstracts, max_workers=5):
+    """Summarize many abstracts concurrently, preserving input order."""
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        return list(pool.map(summarize_abstract, abstracts))
