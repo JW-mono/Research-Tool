@@ -92,6 +92,8 @@ class ResearchToolApp:
         self.report_text.tag_configure("section", font=("Segoe UI", 10, "bold"))
         self.report_text.tag_configure("link", foreground="#0969da", underline=True)
         self.report_text.tag_configure("sep", foreground="#d0d7de")
+        self.report_text.tag_configure("notice", foreground="#57606a", font=("Segoe UI", 10, "italic"))
+        self.report_text.tag_configure("error", foreground="#cf222e")
         for status, color in ACCESS_COLORS.items():
             self.report_text.tag_configure(status, foreground=color, font=("Segoe UI", 9, "bold"))
 
@@ -154,7 +156,12 @@ class ResearchToolApp:
             1 for r in self.records
             if r["access_status"] in ("Open Access (free for anyone)", "TU Delft subscription (likely)")
         )
-        self.status_var.set(f"{len(self.records)} results - {accessible} likely accessible to you.")
+        summarized = sum(1 for r in self.records if r["summary"]["status"] == "ok")
+        status_msg = f"{len(self.records)} results - {accessible} likely accessible - {summarized} summarized"
+        errored = sum(1 for r in self.records if r["summary"]["status"] == "error")
+        if errored:
+            status_msg += f" - {errored} summary errors (see report)"
+        self.status_var.set(status_msg + ".")
         self._render_report()
 
     # ---- Report rendering --------------------------------------------------
@@ -187,9 +194,15 @@ class ResearchToolApp:
                 self._insert_link(t, r["oa_url"], "Open full text")
             t.insert("end", "\n")
 
-            for label, key in (("Introduction", "introduction"), ("Results", "results"), ("Conclusion", "conclusion")):
-                t.insert("end", f"{label}: ", "section")
-                t.insert("end", (r["summary"][key] or "(not available)") + "\n")
+            status = r["summary"]["status"]
+            if status == "no_abstract":
+                t.insert("end", "OpenAlex has no abstract for this result -- nothing to summarize.\n", "notice")
+            elif status == "error":
+                t.insert("end", f"Summary unavailable -- Claude API error: {r['summary']['error']}\n", "error")
+            else:
+                for label, key in (("Introduction", "introduction"), ("Results", "results"), ("Conclusion", "conclusion")):
+                    t.insert("end", f"{label}: ", "section")
+                    t.insert("end", (r["summary"][key] or "(Claude found nothing to say for this section)") + "\n")
 
             if i != len(self.records) - 1:
                 t.insert("end", "\n" + ("-" * 100) + "\n\n", "sep")
@@ -216,8 +229,8 @@ class ResearchToolApp:
             return
         fields = [
             "title", "year", "authors", "journal", "publisher", "doi",
-            "access_status", "oa_url", "summary_introduction",
-            "summary_results", "summary_conclusion",
+            "access_status", "oa_url", "summary_status", "summary_error",
+            "summary_introduction", "summary_results", "summary_conclusion",
         ]
         with open(path, "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=fields)
@@ -228,6 +241,8 @@ class ResearchToolApp:
                     "authors": "; ".join(a for a in r["authors"] if a),
                     "journal": r["journal"], "publisher": r["publisher"], "doi": r["doi"],
                     "access_status": r["access_status"], "oa_url": r["oa_url"],
+                    "summary_status": r["summary"]["status"],
+                    "summary_error": r["summary"]["error"] or "",
                     "summary_introduction": r["summary"]["introduction"],
                     "summary_results": r["summary"]["results"],
                     "summary_conclusion": r["summary"]["conclusion"],
