@@ -11,7 +11,7 @@ from research_tool.summarize import summarize_abstracts, MissingAPIKeyError
 
 def _wrap(text, width=88, indent="      "):
     if not text:
-        return f"{indent}(not available)"
+        return f"{indent}(Claude found nothing to say for this section)"
     return textwrap.fill(text, width=width, initial_indent=indent, subsequent_indent=indent)
 
 
@@ -29,20 +29,27 @@ def _print_report(records):
         if r["is_oa"] and r["oa_url"]:
             print(f"    OA link:  {r['oa_url']}")
         print()
-        print("    Introduction:")
-        print(_wrap(r["summary"]["introduction"]))
-        print("    Results:")
-        print(_wrap(r["summary"]["results"]))
-        print("    Conclusion:")
-        print(_wrap(r["summary"]["conclusion"]))
+
+        status = r["summary"]["status"]
+        if status == "no_abstract":
+            print("    (OpenAlex has no abstract for this result -- nothing to summarize.)")
+        elif status == "error":
+            print(f"    Summary unavailable -- Claude API error: {r['summary']['error']}")
+        else:
+            print("    Introduction:")
+            print(_wrap(r["summary"]["introduction"]))
+            print("    Results:")
+            print(_wrap(r["summary"]["results"]))
+            print("    Conclusion:")
+            print(_wrap(r["summary"]["conclusion"]))
         print()
 
 
 def _write_csv(records, path):
     fields = [
         "title", "year", "authors", "journal", "publisher", "doi",
-        "access_status", "oa_url", "summary_introduction",
-        "summary_results", "summary_conclusion",
+        "access_status", "oa_url", "summary_status", "summary_error",
+        "summary_introduction", "summary_results", "summary_conclusion",
     ]
     with open(path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fields)
@@ -57,6 +64,8 @@ def _write_csv(records, path):
                 "doi": r["doi"],
                 "access_status": r["access_status"],
                 "oa_url": r["oa_url"],
+                "summary_status": r["summary"]["status"],
+                "summary_error": r["summary"]["error"] or "",
                 "summary_introduction": r["summary"]["introduction"],
                 "summary_results": r["summary"]["results"],
                 "summary_conclusion": r["summary"]["conclusion"],
@@ -131,6 +140,16 @@ def main(argv=None):
         if r["access_status"] in ("Open Access (free for anyone)", "TU Delft subscription (likely)")
     )
     print(f"{accessible}/{len(records)} results are likely accessible to you.")
+
+    summarized = sum(1 for r in records if r["summary"]["status"] == "ok")
+    no_abstract = sum(1 for r in records if r["summary"]["status"] == "no_abstract")
+    errored = sum(1 for r in records if r["summary"]["status"] == "error")
+    print(
+        f"{summarized}/{len(records)} summarized"
+        + (f", {no_abstract} had no abstract from OpenAlex" if no_abstract else "")
+        + (f", {errored} failed (Claude API error)" if errored else "")
+        + "."
+    )
 
     if args.csv:
         _write_csv(records, args.csv)
