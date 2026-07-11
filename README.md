@@ -48,6 +48,24 @@ introduction/results/conclusion summary shown directly in a scrollable
 report — no need to click into a result to see its summary. Open-access
 links are clickable. Export buttons in the top-right write CSV/JSON.
 
+### Find a free copy of one specific paper
+
+Hit a paywall on a paper you already have a link to (outside of a topic
+search)? Check whether a legal free copy exists elsewhere:
+
+```
+python find_free_copy.py "10.1093/mam/ozae134"
+python find_free_copy.py "https://doi.org/10.1093/mam/ozae134"
+```
+
+Looks up the DOI against OpenAlex's open-access data (which aggregates
+Unpaywall, institutional repositories, PubMed Central, etc.) and reports a
+free legal URL if one exists (e.g. an author-archived copy). This never
+touches the publisher's own site — it's a pure metadata lookup, the same
+mechanism Unpaywall uses. You need the DOI itself; publisher article URLs
+don't always embed it, so grab it from the page's citation info if the tool
+can't find one in what you paste.
+
 ## How it works
 
 1. **Search** — queries the [OpenAlex](https://openalex.org) API (free, no key required) for publications matching your topic.
@@ -80,12 +98,14 @@ links are clickable. Export buttons in the top-right write CSV/JSON.
 ```
 search.py                          CLI entry point
 gui.py                              GUI entry point
+find_free_copy.py                  single-DOI free-copy lookup entry point
 research_tool/
   openalex.py                      OpenAlex API client + abstract reconstruction
   accessibility.py                 TU Delft access-status logic
   summarize.py                     abstract -> intro/results/conclusion via Claude API
   cli.py                           argument parsing, report printing, CSV/JSON export
   gui.py                           Tkinter GUI
+  oa_finder.py                     single-DOI open-access lookup (find_free_copy.py)
 data/
   tudelft_publishers.json          curated publisher list (edit as needed)
 requirements.txt                   Python dependencies (anthropic SDK)
